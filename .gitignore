@@ -1,0 +1,13 @@
+# Godot 4 cache and local user data
+.godot/
+*.tmp
+*.log
+
+# Exported binaries (distributed via GitHub Releases, not Git commits)
+build/
+release/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini

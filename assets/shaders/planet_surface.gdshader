@@ -13,6 +13,8 @@ uniform vec3 food_dirs[12];
 uniform int food_count = 0;
 uniform vec3 bonus_dir = vec3(0.0, 1.0, 0.0);
 uniform float bonus_active = 0.0;
+uniform vec3 lamp_dirs[16];
+uniform int lamp_count = 0;
 uniform float cell_arc = 0.157;
 uniform vec3 sun_dir = vec3(-0.75, 0.52, 0.40);
 uniform vec3 atmosphere_tint : source_color = vec3(0.28, 0.62, 1.0);
@@ -111,9 +113,29 @@ void fragment() {
 		emission += vec3(1.2, 0.82, 0.15) * ring_b * 0.58 * pulse_b;
 	}
 
+	// Keep grid rows legible across twilight and midnight hemispheres
+	float sun_ndotl = dot(v_sphere_pos, normalize(sun_dir));
+	float sun_facing = smoothstep(-0.35, 0.55, sun_ndotl);
+	float night_factor = 1.0 - smoothstep(-0.20, 0.30, sun_ndotl);
+	vec3 seam_guide_col = (biome_id == 1) ? vec3(0.85, 0.32, 0.08) : ((biome_id == 2) ? vec3(0.45, 0.38, 0.25) : vec3(0.20, 0.48, 0.68));
+	emission += seam_guide_col * seam_factor * night_factor * 0.22;
+
+	// Warm street lamp glow pools illuminating tiles and grid rows softly on the dark side
+	for (int i = 0; i < 16; i++) {
+		if (i >= lamp_count) {
+			break;
+		}
+		float ang_l = acos(clamp(dot(v_sphere_pos, normalize(lamp_dirs[i])), -1.0, 1.0));
+		if (ang_l < cell_arc * 2.1) {
+			float lamp_pool = exp(-pow(ang_l / (cell_arc * 0.88), 2.0));
+			float row_boost = mix(0.18, 0.62, seam_factor);
+			base_col += vec3(0.09, 0.06, 0.02) * lamp_pool * (0.30 + 0.70 * night_factor);
+			emission += vec3(0.56, 0.38, 0.14) * lamp_pool * row_boost * (0.10 + 0.24 * night_factor);
+		}
+	}
+
 	// Realistic atmospheric Rayleigh scattering at grazing sunlit limb angles
 	float ndotv = clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0);
-	float sun_facing = smoothstep(-0.35, 0.55, dot(v_sphere_pos, normalize(sun_dir)));
 	float limb_haze = pow(1.0 - ndotv, 3.4) * (0.25 + 0.75 * sun_facing);
 	base_col = mix(base_col, atmosphere_tint, limb_haze * 0.24);
 

@@ -6,10 +6,12 @@ extends RefCounted
 
 enum GameMode { CLASSIC = 0, ARCADE = 1, OPEN = 2 }
 enum SpeedTier { CHILL = 0, CLASSIC = 1, HYPER = 2 }
+enum PowerUpType { NONE = -1, SHIELD = 0, MAGNET = 1, FROST = 2 }
 
 # Start gently slow and accelerate smoothly over elapsed survival time + apples eaten
 const BASE_INTERVALS := [0.42, 0.34, 0.23]
 const MIN_INTERVALS := [0.21, 0.14, 0.105]
+const POWERUP_DURATION := 8.0
 
 var grid: SphereGrid
 var game_mode: int = GameMode.CLASSIC
@@ -24,6 +26,18 @@ var food_cells: Array[int] = []
 var bonus_food_cell: int = -1
 var bonus_time_left: float = 0.0
 var bonus_max_time: float = 10.0
+
+var powerup_cell: int = -1
+var powerup_type: int = PowerUpType.NONE
+var powerup_time_left: float = 0.0
+var powerup_max_time: float = 12.0
+
+var shield_active: bool = false
+var magnet_time_left: float = 0.0
+var frost_time_left: float = 0.0
+var powerups_collected: int = 0
+var _next_powerup_at_apple: int = 4
+var _next_bonus_at_apple: int = 5
 
 var obstacles: Dictionary = {}
 var wall_cells: Dictionary = {}
@@ -78,6 +92,15 @@ func reset(mode: int = GameMode.CLASSIC, speed: int = SpeedTier.CLASSIC) -> void
 	elapsed_time = 0.0
 	bonus_food_cell = -1
 	bonus_time_left = 0.0
+	powerup_cell = -1
+	powerup_type = PowerUpType.NONE
+	powerup_time_left = 0.0
+	shield_active = false
+	magnet_time_left = 0.0
+	frost_time_left = 0.0
+	powerups_collected = 0
+	_next_powerup_at_apple = 4
+	_next_bonus_at_apple = 5
 	alive = true
 	won = false
 	death_reason = ""
@@ -103,15 +126,33 @@ func reset(mode: int = GameMode.CLASSIC, speed: int = SpeedTier.CLASSIC) -> void
 	prev_head_dir = cur_dir
 
 	if game_mode == GameMode.CLASSIC:
-		_spawn_walls_and_bumps(maxi(2, grid.grid_n / 3), maxi(4, grid.grid_n / 2))
+		if grid.grid_n <= 2:
+			_spawn_walls_and_bumps(0, 2)
+		elif grid.grid_n == 3:
+			_spawn_walls_and_bumps(1, 2)
+		elif grid.grid_n <= 5:
+			_spawn_walls_and_bumps(1, 3)
+		else:
+			_spawn_walls_and_bumps(maxi(2, grid.grid_n / 3), maxi(4, grid.grid_n / 2))
 	elif game_mode == GameMode.ARCADE:
-		_spawn_walls_and_bumps(maxi(4, grid.grid_n / 2 + 1), maxi(8, grid.total_cells / 45))
+		if grid.grid_n <= 2:
+			_spawn_walls_and_bumps(1, 2)
+		elif grid.grid_n == 3:
+			_spawn_walls_and_bumps(2, 3)
+		else:
+			_spawn_walls_and_bumps(maxi(4, grid.grid_n / 2 + 1), maxi(8, grid.total_cells / 45))
 
 	_refill_foods()
 
 
 func get_target_food_count() -> int:
-	if grid.grid_n <= 8:
+	if grid.grid_n <= 2:
+		return 3
+	elif grid.grid_n == 3:
+		return 4
+	elif grid.grid_n <= 5:
+		return 5
+	elif grid.grid_n <= 8:
 		return 6
 	elif grid.grid_n <= 10:
 		return 8
@@ -125,6 +166,8 @@ func get_tick_interval(is_boosting: bool = false) -> float:
 	var food_ramp := float(apples_eaten) * 0.0024
 	var total_ramp := minf(time_ramp + food_ramp, base - min_iv)
 	var interval := maxf(base - total_ramp, min_iv)
+	if frost_time_left > 0.0:
+		interval *= 1.45
 	if is_boosting:
 		interval *= 0.50
 	return interval
@@ -187,6 +230,14 @@ func update_timers(delta: float) -> void:
 		if bonus_time_left <= 0.0:
 			bonus_food_cell = -1
 			bonus_time_left = 0.0
+	if powerup_cell != -1:
+		powerup_time_left -= delta
+		if powerup_time_left <= 0.0:
+			powerup_cell = -1
+			powerup_type = PowerUpType.NONE
+			powerup_time_left = 0.0
+	magnet_time_left = maxf(0.0, magnet_time_left - delta)
+	frost_time_left = maxf(0.0, frost_time_left - delta)
 
 
 func step_tick() -> Dictionary:
@@ -196,6 +247,11 @@ func step_tick() -> Dictionary:
 		"moved": false,
 		"ate_food": false,
 		"ate_bonus": false,
+		"collected_powerup": PowerUpType.NONE,
+		"powerup_cell": -1,
+		"shield_smashed": false,
+		"smash_cell": -1,
+		"magnet_pulled_cells": [],
 		"turned": false,
 		"died": false,
 		"won": false,
@@ -224,10 +280,18 @@ func step_tick() -> Dictionary:
 	var hits_self := occupied.has(next_cell) and not (pending_growth == 0 and next_cell == tail_cell)
 
 	if hits_obstacle:
-		alive = false
-		death_reason = "wall" if wall_cells.has(next_cell) else "obstacle"
-		events["died"] = true
-		return events
+		if shield_active:
+			shield_active = false
+			obstacles.erase(next_cell)
+			wall_cells.erase(next_cell)
+			bump_cells.erase(next_cell)
+			events["shield_smashed"] = true
+			events["smash_cell"] = next_cell
+		else:
+			alive = false
+			death_reason = "wall" if wall_cells.has(next_cell) else "obstacle"
+			events["died"] = true
+			return events
 
 	if hits_self:
 		alive = false
@@ -241,31 +305,44 @@ func step_tick() -> Dictionary:
 	occupied[next_cell] = true
 	events["moved"] = true
 
-	# Check food consumption before tail pop so eating grows immediately on this tick
+	# Check power-up pickup on head cell
+	if next_cell == powerup_cell and powerup_type != PowerUpType.NONE:
+		var ptype := powerup_type
+		powerup_cell = -1
+		powerup_type = PowerUpType.NONE
+		powerup_time_left = 0.0
+		powerups_collected += 1
+		if ptype == PowerUpType.SHIELD:
+			shield_active = true
+		elif ptype == PowerUpType.MAGNET:
+			magnet_time_left = POWERUP_DURATION
+		elif ptype == PowerUpType.FROST:
+			frost_time_left = POWERUP_DURATION
+		score += 25
+		events["collected_powerup"] = ptype
+		events["powerup_cell"] = next_cell
+		events["points_gained"] = int(events["points_gained"]) + 25
+
+	# Check direct food consumption before tail pop so eating grows immediately
 	var food_idx := food_cells.find(next_cell)
 	if food_idx >= 0:
-		apples_eaten += 1
-		pending_growth += 1
-		combo = mini(combo + 1, 5)
-		combo_time_left = 4.5
-		var pts := 10 + (combo - 1) * 5
-		score += pts
-		events["ate_food"] = true
-		events["points_gained"] = pts
-		events["eat_cell"] = next_cell
-		food_cells.remove_at(food_idx)
-
+		_consume_food_at(food_idx, next_cell, events)
 	elif next_cell == bonus_food_cell:
-		pending_growth += 2
-		combo = mini(combo + 1, 5)
-		combo_time_left = 5.0
-		var bonus_pts := 50 + int(ceil(bonus_time_left)) * 5
-		score += bonus_pts
-		events["ate_bonus"] = true
-		events["points_gained"] = bonus_pts
-		events["eat_cell"] = next_cell
-		bonus_food_cell = -1
-		bonus_time_left = 0.0
+		_consume_bonus_food(next_cell, events)
+
+	# Magnet 2-step attraction radius pulls nearby fruits directly to the snake
+	if magnet_time_left > 0.0:
+		var reach := _collect_cells_within_two_steps(next_cell)
+		var pulled: Array[int] = []
+		for i in range(food_cells.size() - 1, -1, -1):
+			var fc := food_cells[i]
+			if reach.has(fc):
+				pulled.append(fc)
+				_consume_food_at(i, fc, events)
+		if bonus_food_cell != -1 and reach.has(bonus_food_cell):
+			pulled.append(bonus_food_cell)
+			_consume_bonus_food(bonus_food_cell, events)
+		events["magnet_pulled_cells"] = pulled
 
 	if pending_growth > 0:
 		pending_growth -= 1
@@ -282,8 +359,12 @@ func step_tick() -> Dictionary:
 			return events
 		if events["ate_food"]:
 			_refill_foods()
-			if apples_eaten % 5 == 0 and bonus_food_cell == -1:
+			if apples_eaten >= _next_bonus_at_apple and bonus_food_cell == -1:
 				_spawn_bonus_food()
+				_next_bonus_at_apple = apples_eaten + 5
+			if apples_eaten >= _next_powerup_at_apple and powerup_cell == -1:
+				_spawn_powerup()
+				_next_powerup_at_apple = apples_eaten + _rng.randi_range(4, 6)
 
 	return events
 
@@ -305,7 +386,8 @@ func _spawn_walls_and_bumps(wall_count: int, bump_count: int) -> void:
 			safe_cells[grid.get_neighbor(c, d)] = true
 	var ahead := snake_cells[0]
 	var adir := head_dir
-	for _i in range(9):
+	var safe_steps := mini(9, maxi(2, grid.grid_n))
+	for _i in range(safe_steps):
 		var st := grid.step(ahead, adir)
 		ahead = st["cell"]
 		adir = st["dir"]
@@ -417,6 +499,66 @@ func _refill_foods() -> void:
 		food_cells.append(free[k])
 
 
+func _consume_food_at(food_idx: int, cell_id: int, events: Dictionary) -> void:
+	apples_eaten += 1
+	pending_growth += 1
+	combo = mini(combo + 1, 5)
+	combo_time_left = 4.5
+	var mult := 2 if magnet_time_left > 0.0 else 1
+	var pts := (10 + (combo - 1) * 5) * mult
+	score += pts
+	events["ate_food"] = true
+	events["points_gained"] = int(events["points_gained"]) + pts
+	if int(events["eat_cell"]) == -1:
+		events["eat_cell"] = cell_id
+	food_cells.remove_at(food_idx)
+
+
+func _consume_bonus_food(cell_id: int, events: Dictionary) -> void:
+	pending_growth += 2
+	combo = mini(combo + 1, 5)
+	combo_time_left = 5.0
+	var mult := 2 if magnet_time_left > 0.0 else 1
+	var bonus_pts := (50 + int(ceil(bonus_time_left)) * 5) * mult
+	score += bonus_pts
+	events["ate_bonus"] = true
+	events["points_gained"] = int(events["points_gained"]) + bonus_pts
+	if int(events["eat_cell"]) == -1:
+		events["eat_cell"] = cell_id
+	bonus_food_cell = -1
+	bonus_time_left = 0.0
+
+
+func _collect_cells_within_two_steps(origin: int) -> Dictionary:
+	var reach := {}
+	var ring1: Array[int] = []
+	for d in range(4):
+		var nb := grid.get_neighbor(origin, d)
+		if nb >= 0 and nb != origin:
+			reach[nb] = true
+			ring1.append(nb)
+	for r1 in ring1:
+		for d in range(4):
+			var nb2 := grid.get_neighbor(r1, d)
+			if nb2 >= 0 and nb2 != origin:
+				reach[nb2] = true
+	return reach
+
+
+func _spawn_powerup() -> void:
+	var free := _collect_free_cells()
+	if free.is_empty():
+		powerup_cell = -1
+		powerup_type = PowerUpType.NONE
+		return
+	var pool: Array[int] = [PowerUpType.MAGNET, PowerUpType.FROST]
+	if game_mode != GameMode.OPEN:
+		pool.append(PowerUpType.SHIELD)
+	powerup_type = pool[_rng.randi_range(0, pool.size() - 1)]
+	powerup_cell = free[_rng.randi_range(0, free.size() - 1)]
+	powerup_time_left = powerup_max_time
+
+
 func _spawn_bonus_food() -> void:
 	var free := _collect_free_cells()
 	if free.is_empty():
@@ -432,6 +574,6 @@ func _collect_free_cells() -> Array[int]:
 		food_set[fc] = true
 	var free: Array[int] = []
 	for cid in range(grid.total_cells):
-		if not occupied.has(cid) and not obstacles.has(cid) and not food_set.has(cid) and cid != bonus_food_cell:
+		if not occupied.has(cid) and not obstacles.has(cid) and not food_set.has(cid) and cid != bonus_food_cell and cid != powerup_cell:
 			free.append(cid)
 	return free

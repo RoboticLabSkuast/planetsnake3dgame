@@ -433,6 +433,21 @@ def generate_audio() -> None:
     )
     write_wav(AUDIO_DIR / "milestone.wav", mile, sr)
 
+    # 8. Sparkling power-up pickup chime
+    t = np.linspace(0.0, 0.44, int(sr * 0.44), endpoint=False)
+    pwr = (
+        np.sin(2.0 * np.pi * 587.33 * t) * np.exp(-t * 8.0) * 0.26
+        + np.sin(2.0 * np.pi * 880.00 * np.maximum(t - 0.05, 0.0)) * (t >= 0.05) * np.exp(-np.maximum(t - 0.05, 0.0) * 7.0) * 0.28
+        + np.sin(2.0 * np.pi * 1174.66 * np.maximum(t - 0.11, 0.0)) * (t >= 0.11) * np.exp(-np.maximum(t - 0.11, 0.0) * 6.0) * 0.32
+    )
+    write_wav(AUDIO_DIR / "powerup.wav", pwr, sr)
+
+    # 9. Shield stone shatter impact
+    t = np.linspace(0.0, 0.40, int(sr * 0.40), endpoint=False)
+    shatter_noise = rng.normal(0.0, 1.0, len(t)) * np.exp(-t * 14.0) * 0.55
+    metal_ring = np.sin(2.0 * np.pi * 410.0 * t) * np.exp(-t * 9.0) * 0.35 + np.sin(2.0 * np.pi * 220.0 * t) * np.exp(-t * 11.0) * 0.40
+    write_wav(AUDIO_DIR / "shield_break.wav", shatter_noise + metal_ring, sr)
+
 
 def generate_ui_icons() -> None:
     """Generate crisp 96x96 supersampled transparent UI icons for cross-platform HUD/menus."""
@@ -517,6 +532,37 @@ def generate_ui_icons() -> None:
     d = ImageDraw.Draw(im)
     d.polygon([(70, 44), (212, 128), (70, 212)], fill=(255, 255, 255, 255))
     finish(im, "play")
+
+    # 8. Shield icon (emerald-cyan)
+    im = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.polygon([(128, 28), (214, 62), (198, 160), (128, 228), (58, 160), (42, 62)],
+              fill=(54, 216, 148, 255), outline=(190, 255, 225, 255), width=10)
+    d.polygon([(128, 56), (186, 80), (174, 148), (128, 198), (82, 148), (70, 80)],
+              fill=(28, 148, 102, 255))
+    finish(im, "shield")
+
+    # 9. Magnet icon (violet-magenta)
+    im = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.arc([52, 46, 204, 208], 180, 360, fill=(210, 92, 255, 255), width=32)
+    d.rectangle([52, 124, 84, 196], fill=(210, 92, 255, 255))
+    d.rectangle([172, 124, 204, 196], fill=(210, 92, 255, 255))
+    d.rectangle([52, 174, 84, 206], fill=(225, 240, 255, 255))
+    d.rectangle([172, 174, 204, 206], fill=(225, 240, 255, 255))
+    finish(im, "magnet")
+
+    # 10. Frost snowflake / crystal icon (icy cyan)
+    im = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    cx = cy = S / 2.0
+    for k in range(6):
+        ang = k * (math.pi / 3.0)
+        ex = cx + math.cos(ang) * 86.0
+        ey = cy + math.sin(ang) * 86.0
+        d.line([(cx, cy), (ex, ey)], fill=(120, 225, 255, 255), width=16)
+    d.ellipse([cx - 26, cy - 26, cx + 26, cy + 26], fill=(215, 248, 255, 255))
+    finish(im, "frost")
 
 
 def main() -> None:

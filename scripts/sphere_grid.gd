@@ -54,7 +54,7 @@ func _init(n: int = 10) -> void:
 
 
 func configure(n: int) -> void:
-	grid_n = maxi(n, 4)
+	grid_n = clampi(n, 2, 14)
 	cells_per_face = grid_n * grid_n
 	total_cells = FACE_COUNT * cells_per_face
 	cell_arc_angle = (PI * 0.5) / float(grid_n)

@@ -635,3 +635,163 @@ static func _slerp(a: Vector3, b: Vector3, t: float) -> Vector3:
 	var omega := acos(dot_ab)
 	var sin_o := sin(omega)
 	return (a * sin((1.0 - t) * omega) + b * sin(t * omega)) / sin_o
+
+
+static func build_shockwave_ring_mesh(inner_r: float, outer_r: float) -> ArrayMesh:
+	## Builds a flat circular ring on XZ for expanding impact & collect shockwaves.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SEGS := 32
+	for i in range(SEGS):
+		var a0 := (float(i) / float(SEGS)) * TAU
+		var a1 := (float(i + 1) / float(SEGS)) * TAU
+		var p_o0 := Vector3(cos(a0) * outer_r, 0.0, sin(a0) * outer_r)
+		var p_o1 := Vector3(cos(a1) * outer_r, 0.0, sin(a1) * outer_r)
+		var p_i1 := Vector3(cos(a1) * inner_r, 0.0, sin(a1) * inner_r)
+		var p_i0 := Vector3(cos(a0) * inner_r, 0.0, sin(a0) * inner_r)
+		_add_uv_quad(st, p_o0, p_o1, p_i1, p_i0)
+	st.generate_normals()
+	return st.commit()
+
+
+static func build_powerup_mesh(radius: float, ptype: int) -> ArrayMesh:
+	## Builds unmistakable sculpted 3D silhouettes for Shield (0), Magnet (1), and Frost (2).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	if ptype == 0:
+		# Shield: beveled hexagonal kite-shield energy core
+		_add_bipyramid(st, Vector3.ZERO, radius * 0.92, radius * 1.15, radius * 0.42, 6)
+		_add_box_solid(st, Vector3(0.0, 0.0, 0.0), Vector3(radius * 0.24, radius * 1.25, radius * 0.48))
+	elif ptype == 1:
+		# Magnet: 3D U-shaped horseshoe magnet
+		var arm_w := radius * 0.28
+		var arm_h := radius * 0.72
+		var arm_x := radius * 0.62
+		_add_box_solid(st, Vector3(-arm_x, radius * 0.22, 0.0), Vector3(arm_w, arm_h, arm_w))
+		_add_box_solid(st, Vector3(arm_x, radius * 0.22, 0.0), Vector3(arm_w, arm_h, arm_w))
+		_add_box_solid(st, Vector3(0.0, -radius * 0.62, 0.0), Vector3(arm_x + arm_w, arm_w * 0.95, arm_w))
+		_add_box_solid(st, Vector3(-arm_x, radius * 0.95, 0.0), Vector3(arm_w * 1.12, arm_w * 0.55, arm_w * 1.12))
+		_add_box_solid(st, Vector3(arm_x, radius * 0.95, 0.0), Vector3(arm_w * 1.12, arm_w * 0.55, arm_w * 1.12))
+	else:
+		# Frost: 6-pointed crystalline ice star
+		_add_bipyramid(st, Vector3.ZERO, radius * 0.36, radius * 1.20, radius * 0.36, 4)
+		for k in range(3):
+			var ang := float(k) * (PI / 3.0)
+			_add_rotated_rod_crystal(st, ang, radius * 1.05, radius * 0.24)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _add_box_solid(st: SurfaceTool, center: Vector3, half_ext: Vector3) -> void:
+	var hx := half_ext.x
+	var hy := half_ext.y
+	var hz := half_ext.z
+	var b0 := center + Vector3(-hx, -hy, -hz)
+	var b1 := center + Vector3(hx, -hy, -hz)
+	var b2 := center + Vector3(hx, -hy, hz)
+	var b3 := center + Vector3(-hx, -hy, hz)
+	var t0 := center + Vector3(-hx, hy, -hz)
+	var t1 := center + Vector3(hx, hy, -hz)
+	var t2 := center + Vector3(hx, hy, hz)
+	var t3 := center + Vector3(-hx, hy, hz)
+	_add_uv_quad(st, t0, t1, t2, t3)
+	_add_uv_quad(st, b3, b2, b1, b0)
+	_add_uv_quad(st, b0, b1, t1, t0)
+	_add_uv_quad(st, b1, b2, t2, t1)
+	_add_uv_quad(st, b2, b3, t3, t2)
+	_add_uv_quad(st, b3, b0, t0, t3)
+
+
+static func _add_bipyramid(st: SurfaceTool, center: Vector3, rx: float, ry: float, rz: float, sides: int) -> void:
+	var top := center + Vector3(0.0, ry, 0.0)
+	var bot := center - Vector3(0.0, ry, 0.0)
+	for i in range(sides):
+		var a0 := (float(i) / float(sides)) * TAU
+		var a1 := (float(i + 1) / float(sides)) * TAU
+		var p0 := center + Vector3(cos(a0) * rx, 0.0, sin(a0) * rz)
+		var p1 := center + Vector3(cos(a1) * rx, 0.0, sin(a1) * rz)
+		st.set_uv(Vector2(0.5, 0.0)); st.add_vertex(top)
+		st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(p0)
+		st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(p1)
+		st.set_uv(Vector2(0.5, 1.0)); st.add_vertex(bot)
+		st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(p1)
+		st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(p0)
+
+
+static func _add_rotated_rod_crystal(st: SurfaceTool, ang: float, len_half: float, rad: float) -> void:
+	var axis := Vector3(cos(ang), 0.0, sin(ang)).normalized()
+	var perp := Vector3(-sin(ang), 0.0, cos(ang)).normalized()
+	var tip_a := axis * len_half
+	var tip_b := -axis * len_half
+	var ring: Array[Vector3] = [
+		perp * rad,
+		Vector3(0.0, rad, 0.0),
+		-perp * rad,
+		Vector3(0.0, -rad, 0.0),
+	]
+	for i in range(4):
+		var p0 := ring[i]
+		var p1 := ring[(i + 1) % 4]
+		st.set_uv(Vector2(0.5, 0.0)); st.add_vertex(tip_a)
+		st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(p0)
+		st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(p1)
+		st.set_uv(Vector2(0.5, 1.0)); st.add_vertex(tip_b)
+		st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(p1)
+		st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(p0)
+
+
+static func build_street_lamp_node(cell_len: float, pole_mat: Material, bulb_mat: Material) -> Node3D:
+	## Builds a miniature orbital street lamp post with warm lantern bulb to sit on grid intersections.
+	var root := Node3D.new()
+
+	var base := MeshInstance3D.new()
+	var base_cyl := CylinderMesh.new()
+	base_cyl.top_radius = cell_len * 0.048
+	base_cyl.bottom_radius = cell_len * 0.072
+	base_cyl.height = cell_len * 0.14
+	base_cyl.radial_segments = 8
+	base.mesh = base_cyl
+	base.material_override = pole_mat
+	base.position = Vector3(0.0, 0.0, 0.0)
+	base.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(base)
+
+	var post := MeshInstance3D.new()
+	var post_cyl := CylinderMesh.new()
+	post_cyl.top_radius = cell_len * 0.024
+	post_cyl.bottom_radius = cell_len * 0.036
+	post_cyl.height = cell_len * 0.54
+	post_cyl.radial_segments = 8
+	post.mesh = post_cyl
+	post.material_override = pole_mat
+	post.position = Vector3(0.0, cell_len * 0.28, 0.0)
+	post.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(post)
+
+	var hood := MeshInstance3D.new()
+	var hood_cyl := CylinderMesh.new()
+	hood_cyl.top_radius = cell_len * 0.035
+	hood_cyl.bottom_radius = cell_len * 0.105
+	hood_cyl.height = cell_len * 0.065
+	hood_cyl.radial_segments = 10
+	hood.mesh = hood_cyl
+	hood.material_override = pole_mat
+	hood.position = Vector3(0.0, cell_len * 0.56, 0.0)
+	hood.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(hood)
+
+	var bulb := MeshInstance3D.new()
+	var bulb_sph := SphereMesh.new()
+	bulb_sph.radius = cell_len * 0.068
+	bulb_sph.height = cell_len * 0.136
+	bulb_sph.radial_segments = 10
+	bulb_sph.rings = 6
+	bulb.mesh = bulb_sph
+	bulb.material_override = bulb_mat
+	bulb.position = Vector3(0.0, cell_len * 0.51, 0.0)
+	bulb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(bulb)
+
+	return root

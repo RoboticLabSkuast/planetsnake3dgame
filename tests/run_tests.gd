@@ -13,6 +13,9 @@ var _smoke_frames := 0
 
 func _initialize() -> void:
 	print("=== Running Planet Snake 3D Automated Verification ===")
+	_test_sphere_grid_topology(2)
+	_test_sphere_grid_topology(3)
+	_test_sphere_grid_topology(5)
 	_test_sphere_grid_topology(8)
 	_test_sphere_grid_topology(10)
 	_test_sphere_grid_topology(14)
@@ -23,6 +26,7 @@ func _initialize() -> void:
 	_test_obstacles_and_collision()
 	_test_win_condition_on_small_grid()
 	_test_procedural_meshes()
+	_test_powerups_shield_magnet_frost()
 
 	var packed: PackedScene = load("res://scenes/main.tscn")
 	_assert(packed != null, "main.tscn loads")
@@ -34,8 +38,20 @@ func _initialize() -> void:
 func _process(delta: float) -> bool:
 	_smoke_frames += 1
 	if _smoke_frames == 2 and _scene_inst != null:
+		_scene_inst.save_disabled = true
+		_assert(_scene_inst.clouds_mesh_inst != null, "cloud shell created")
+		_assert(_scene_inst.lamps_root != null and _scene_inst._lamp_dirs.size() > 0, "dark-side street lamps generated")
+		_assert(_scene_inst.boost_particles != null and _scene_inst.slither_dust_particles != null, "trail & dust particles created")
+		_assert(_scene_inst.crash_particles != null and _scene_inst.powerup_burst_particles != null, "burst particles created")
+		_scene_inst.apply_settings(0, 0, 1, 1, 0, 0, true, true, 2)
+		_assert(_scene_inst.selected_skin == 2, "apply_settings updates skin index")
+		_scene_inst.set_grid_size(2)
+		_assert(_scene_inst.selected_grid_n == 2 and _scene_inst.grid.total_cells == 24, "set_grid_size(2) rebuilds 2x2x6 globe")
+		_scene_inst.set_grid_size(14)
+		_assert(_scene_inst.selected_grid_n == 14 and _scene_inst.grid.total_cells == 1176, "set_grid_size(14) rebuilds 14x14x6 globe")
 		_scene_inst.start_new_game()
 		_assert(_scene_inst.play_state == 1, "game transitions to PLAYING")
+		_scene_inst.set_boosting(true)
 		_scene_inst.apply_directional_input(Vector2(1.0, 0.0))
 	elif _smoke_frames == 6 and _scene_inst != null:
 		_assert(_scene_inst.logic.alive, "snake remains alive during live ticks")
@@ -253,3 +269,89 @@ func _test_procedural_meshes() -> void:
 
 	var boulder := ProceduralMeshesScript.build_boulder_mesh(0.25, 42)
 	_assert(boulder.get_surface_count() == 1, "boulder mesh generated")
+
+	for ptype in range(3):
+		var pm := ProceduralMeshesScript.build_powerup_mesh(0.25, ptype)
+		_assert(pm.get_surface_count() == 1, "powerup mesh %d generated" % ptype)
+	var ring := ProceduralMeshesScript.build_shockwave_ring_mesh(0.18, 0.34)
+	_assert(ring.get_surface_count() == 1, "shockwave ring mesh generated")
+	var lamp := ProceduralMeshesScript.build_street_lamp_node(0.62, mat, mat)
+	_assert(lamp.get_child_count() == 4, "street lamp node has base, post, hood, bulb")
+	lamp.free()
+
+
+func _test_powerups_shield_magnet_frost() -> void:
+	var grid = SphereGridScript.new(10)
+	var logic = SnakeLogicScript.new(grid, 909)
+	logic.reset(SnakeLogicScript.GameMode.OPEN, SnakeLogicScript.SpeedTier.CLASSIC)
+
+	# 0. Verify powerup spawn & tiny 2x2 / 3x3 globe compatibility
+	for tiny_n in [2, 3]:
+		var tg = SphereGridScript.new(tiny_n)
+		for m in [SnakeLogicScript.GameMode.CLASSIC, SnakeLogicScript.GameMode.ARCADE, SnakeLogicScript.GameMode.OPEN]:
+			var tl = SnakeLogicScript.new(tg, 42)
+			tl.reset(m, SnakeLogicScript.SpeedTier.CLASSIC)
+			_assert(tl.snake_cells.size() == 4 and tl.food_cells.size() >= 3, "tiny %dx%d spawns cleanly in mode %d" % [tiny_n, tiny_n, m])
+			_assert(tl._is_free_space_connected(), "tiny %dx%d stays connected in mode %d" % [tiny_n, tiny_n, m])
+
+	for mode in [SnakeLogicScript.GameMode.OPEN, SnakeLogicScript.GameMode.CLASSIC]:
+		logic.reset(mode, SnakeLogicScript.SpeedTier.CLASSIC)
+		var cur_c: int = logic.snake_cells[0]
+		var cur_d: int = logic.head_dir
+		for step_i in range(4):
+			var st: Dictionary = grid.step(cur_c, cur_d)
+			cur_c = int(st["cell"])
+			cur_d = int(st["dir"])
+			logic.obstacles.erase(cur_c)
+			logic.wall_cells.erase(cur_c)
+			logic.bump_cells.erase(cur_c)
+			if not logic.food_cells.has(cur_c):
+				logic.food_cells.append(cur_c)
+			var ev_sp: Dictionary = logic.step_tick()
+			_assert(ev_sp["ate_food"], "ate apple during spawn test")
+		_assert(logic.powerup_cell >= 0 and logic.powerup_type != SnakeLogicScript.PowerUpType.NONE, "powerup spawns cleanly in mode %d" % mode)
+		if mode == SnakeLogicScript.GameMode.OPEN:
+			_assert(logic.powerup_type != SnakeLogicScript.PowerUpType.SHIELD, "open mode does not spawn wall-only shield")
+
+	# 1. Shield wall-shatter check & subsequent unprotected collision
+	logic.reset(SnakeLogicScript.GameMode.OPEN, SnakeLogicScript.SpeedTier.CLASSIC)
+	var st1: Dictionary = grid.step(logic.snake_cells[0], logic.head_dir)
+	var wall_ahead: int = st1["cell"]
+	var st2: Dictionary = grid.step(wall_ahead, st1["dir"])
+	var wall_second: int = st2["cell"]
+	logic.food_cells.assign([])
+	logic.obstacles[wall_ahead] = true
+	logic.wall_cells[wall_ahead] = true
+	logic.obstacles[wall_second] = true
+	logic.wall_cells[wall_second] = true
+	logic.shield_active = true
+
+	var ev_smash: Dictionary = logic.step_tick()
+	_assert(ev_smash["shield_smashed"] and not ev_smash["died"] and logic.alive, "shield smashes obstacle without dying")
+	_assert(not logic.shield_active and not logic.obstacles.has(wall_ahead), "shield consumed and obstacle removed")
+	_assert(logic.snake_cells[0] == wall_ahead, "snake advances onto smashed cell")
+
+	var ev_crash: Dictionary = logic.step_tick()
+	_assert(ev_crash["died"] and not logic.alive and logic.death_reason == "wall", "unshielded wall hit still ends run")
+
+	# 2. Magnet 2-step pull + 2x points check & Frost speed slowdown
+	logic.reset(SnakeLogicScript.GameMode.OPEN, SnakeLogicScript.SpeedTier.CLASSIC)
+	var next_st: Dictionary = grid.step(logic.snake_cells[0], logic.head_dir)
+	var next_c: int = next_st["cell"]
+	var pull_a: int = grid.get_neighbor(next_c, SphereGridScript.turn_left(next_st["dir"]))
+	var pull_b: int = grid.step(next_c, next_st["dir"])["cell"]
+	var far_c: int = grid.cell_id(0, 0, 0)
+	logic.food_cells.assign([pull_a, pull_b, far_c])
+	logic.magnet_time_left = 6.0
+	var pre_score: int = logic.score
+	var ev_mag: Dictionary = logic.step_tick()
+	_assert(ev_mag["ate_food"] and ev_mag["magnet_pulled_cells"].size() == 2, "magnet pulls nearby apples within 2 steps")
+	_assert(logic.score - pre_score == 50, "magnet grants 2x score multiplier (20 + 30)")
+	_assert(logic.food_cells.has(far_c), "magnet does not pull distant apples")
+
+	var base_iv: float = logic.get_tick_interval(false)
+	logic.frost_time_left = 6.0
+	var frost_iv: float = logic.get_tick_interval(false)
+	_assert(frost_iv > base_iv * 1.4, "frost slows snake tick interval")
+	logic.update_timers(7.0)
+	_assert(logic.magnet_time_left == 0.0 and logic.frost_time_left == 0.0, "powerup timers expire cleanly")

@@ -39,6 +39,14 @@ var _lbl_length: Label
 var _lbl_combo: Label
 var _bonus_bar_box: VBoxContainer
 var _bonus_bar: ProgressBar
+var _powerup_row: HBoxContainer
+var _badge_shield: PanelContainer
+var _badge_magnet: PanelContainer
+var _magnet_bar: ProgressBar
+var _magnet_lbl: Label
+var _badge_frost: PanelContainer
+var _frost_bar: ProgressBar
+var _frost_lbl: Label
 var _btn_mute: Button
 var _btn_pause: Button
 var _lbl_cam_hint: Label
@@ -49,7 +57,10 @@ var _milestone_tween: Tween
 # Selector button groups
 var _mode_btns: Array[Button] = []
 var _biome_btns: Array[Button] = []
-var _size_btns: Array[Button] = []
+var _skin_btns: Array[Button] = []
+var _btn_size_dec: Button
+var _lbl_size_val: Label
+var _btn_size_inc: Button
 var _speed_btns: Array[Button] = []
 var _cam_btns: Array[Button] = []
 var _touch_btns: Array[Button] = []
@@ -178,7 +189,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _load_icons() -> void:
-	for k in ["trophy", "apple", "globe", "gear", "guide", "sound_on", "sound_off", "play"]:
+	for k in ["trophy", "apple", "globe", "gear", "guide", "sound_on", "sound_off", "play", "shield", "magnet", "frost"]:
 		_icons[k] = load("res://assets/textures/ui/%s.png" % k)
 
 
@@ -328,6 +339,30 @@ func _build_hud(parent: Control) -> void:
 		game.toggle_pause()
 	)
 	right_row.add_child(_btn_pause)
+
+	_powerup_row = HBoxContainer.new()
+	_powerup_row.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_powerup_row.offset_left = 0.0
+	_powerup_row.offset_top = 56.0
+	_powerup_row.add_theme_constant_override("separation", 8)
+	_powerup_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud_layer.add_child(_powerup_row)
+
+	var sh := _make_powerup_badge("shield", "SHIELD READY", Color(0.24, 0.96, 0.66), false)
+	_badge_shield = sh["panel"]
+	_powerup_row.add_child(_badge_shield)
+
+	var mg := _make_powerup_badge("magnet", "MAGNET 2X", Color(0.84, 0.34, 1.0), true)
+	_badge_magnet = mg["panel"]
+	_magnet_lbl = mg["label"]
+	_magnet_bar = mg["bar"]
+	_powerup_row.add_child(_badge_magnet)
+
+	var fr := _make_powerup_badge("frost", "FROST", Color(0.32, 0.84, 1.0), true)
+	_badge_frost = fr["panel"]
+	_frost_lbl = fr["label"]
+	_frost_bar = fr["bar"]
+	_powerup_row.add_child(_badge_frost)
 
 	_milestone_panel = _make_glass_panel(Color(0.06, 0.11, 0.19, 0.90), 10)
 	_milestone_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
@@ -587,11 +622,44 @@ func _build_customize_modal(parent: Control) -> void:
 		_refresh_selector_states()
 	))
 
-	box.add_child(_make_selector_row("Globe", ["8x8", "10x10", "14x14"], _size_btns, func(idx: int) -> void:
+	box.add_child(_make_selector_row("Skin", ["Emerald", "Magma", "Frost", "Gold"], _skin_btns, func(idx: int) -> void:
 		game.play_ui_click()
-		game.apply_settings(game.selected_mode, game.selected_biome, idx, game.selected_speed_idx, game.camera_mode, game.touch_mode, game.audio_muted, game.high_quality)
+		game.apply_settings(game.selected_mode, game.selected_biome, game.selected_size_idx, game.selected_speed_idx, game.camera_mode, game.touch_mode, game.audio_muted, game.high_quality, idx)
 		_refresh_selector_states()
 	))
+
+	var size_row := HBoxContainer.new()
+	size_row.add_theme_constant_override("separation", 8)
+	box.add_child(size_row)
+
+	var size_lbl := _make_label("Globe", 15, Color(0.76, 0.84, 0.95))
+	size_lbl.custom_minimum_size = Vector2(74, 34)
+	size_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	size_row.add_child(size_lbl)
+
+	_btn_size_dec = _make_pill_button("-", 18, Color(0.14, 0.20, 0.30, 0.90))
+	_btn_size_dec.custom_minimum_size = Vector2(52, 36)
+	_btn_size_dec.pressed.connect(func() -> void:
+		game.play_ui_click()
+		game.set_grid_size(game.selected_grid_n - 1)
+		_refresh_selector_states()
+	)
+	size_row.add_child(_btn_size_dec)
+
+	_lbl_size_val = _make_label("10x10 (600 cells)", 14, Color(0.42, 0.96, 0.64))
+	_lbl_size_val.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_lbl_size_val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_lbl_size_val.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	size_row.add_child(_lbl_size_val)
+
+	_btn_size_inc = _make_pill_button("+", 18, Color(0.14, 0.20, 0.30, 0.90))
+	_btn_size_inc.custom_minimum_size = Vector2(52, 36)
+	_btn_size_inc.pressed.connect(func() -> void:
+		game.play_ui_click()
+		game.set_grid_size(game.selected_grid_n + 1)
+		_refresh_selector_states()
+	)
+	size_row.add_child(_btn_size_inc)
 
 	box.add_child(_make_selector_row("Speed", ["Chill", "Classic", "Hyper"], _speed_btns, func(idx: int) -> void:
 		game.play_ui_click()
@@ -679,7 +747,7 @@ func _build_guide_modal(parent: Control) -> void:
 	_guide_overlay.add_child(panel)
 
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 10)
+	box.add_theme_constant_override("separation", 8)
 	panel.add_child(box)
 
 	var title := _make_label("HOW TO PLAY", 24, Color(0.42, 0.96, 0.64))
@@ -687,15 +755,16 @@ func _build_guide_modal(parent: Control) -> void:
 	box.add_child(title)
 
 	var sections := [
-		["Classic Sphere Rules", "Slither seamlessly across all 6 curved faces of the 3D globe. Eat crimson apples to grow longer without crashing into your tail or boulders."],
+		["Classic Sphere Rules", "Slither seamlessly across all 6 curved faces of the 3D globe. Eat crimson apples to grow longer without crashing into your tail, walls, or boulders."],
 		["Controls (Desktop)", "WASD or Arrow Keys turn along screen directions (or Left/Right in 3D Chase). Hold Space/Shift to Boost, Scroll Wheel to Zoom, P/Esc to Pause."],
 		["Controls (Mobile)", "Swipe anywhere in the direction you want to turn, or use the Virtual D-Pad & Boost button. Pinch with two fingers to adjust Zoom."],
 		["Combos & Golden Fruit", "Eat apples rapidly to build up to a x5 Combo multiplier. Every 5th apple spawns a timed Golden Fruit worth bonus points and +2 growth!"],
+		["Power-Ups & Skins", "Grab Shield (shatters 1 wall), Magnet 2x (pulls nearby apples for double points), and Frost (slows speed). Customize Snake Skins in Worlds!"],
 	]
 	for sec in sections:
-		var h := _make_label(sec[0], 16, Color(1.0, 0.85, 0.34))
+		var h := _make_label(sec[0], 15, Color(1.0, 0.85, 0.34))
 		box.add_child(h)
-		var body := _make_label(sec[1], 14, Color(0.84, 0.90, 0.98))
+		var body := _make_label(sec[1], 13, Color(0.84, 0.90, 0.98))
 		body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		box.add_child(body)
 
@@ -989,6 +1058,21 @@ func _on_hud_updated(data: Dictionary) -> void:
 	if bonus_ratio > 0.0:
 		_bonus_bar.value = bonus_ratio
 
+	if _badge_shield != null:
+		_badge_shield.visible = bool(data.get("shield_active", false))
+	if _badge_magnet != null:
+		var m_ratio := float(data.get("magnet_ratio", 0.0))
+		_badge_magnet.visible = m_ratio > 0.0
+		if _badge_magnet.visible:
+			_magnet_lbl.text = "2X %.1fs" % float(data.get("magnet_secs", 0.0))
+			_magnet_bar.value = m_ratio
+	if _badge_frost != null:
+		var f_ratio := float(data.get("frost_ratio", 0.0))
+		_badge_frost.visible = f_ratio > 0.0
+		if _badge_frost.visible:
+			_frost_lbl.text = "FROST %.1fs" % float(data.get("frost_secs", 0.0))
+			_frost_bar.value = f_ratio
+
 	var is_muted := bool(data["muted"])
 	if _btn_mute != null:
 		_btn_mute.icon = _icons["sound_off" if is_muted else "sound_on"]
@@ -1036,20 +1120,29 @@ func _refresh_selector_states() -> void:
 		return
 	var mode_names := ["Classic", "Arcade", "Open"]
 	var biome_names := ["Mossy Terra", "Volcanic", "Desert"]
-	var size_names := ["8x8", "10x10", "14x14"]
+	var skin_names := ["Emerald", "Magma", "Frost", "Gold"]
+	var n := clampi(game.selected_grid_n, GameController.MIN_GRID_N, GameController.MAX_GRID_N)
 	var top_best := maxi(int(game.best_scores["classic"]), int(game.best_scores["arcade"]))
 	_home_best_btn.text = "%d" % top_best
 	_home_apples_btn.text = "%d" % int(game.stats["total_apples"])
 	_home_sound_btn.icon = _icons["sound_off" if game.audio_muted else "sound_on"]
-	_home_mode_chip.text = "%s  •  %s  •  %s" % [
+	_home_mode_chip.text = "%s  •  %s  •  %dx%d  •  %s" % [
 		mode_names[clampi(game.selected_mode, 0, 2)],
 		biome_names[clampi(game.selected_biome, 0, 2)],
-		size_names[clampi(game.selected_size_idx, 0, 2)],
+		n,
+		n,
+		skin_names[clampi(game.selected_skin, 0, 3)],
 	]
 
 	_highlight_btn_group(_mode_btns, game.selected_mode)
 	_highlight_btn_group(_biome_btns, game.selected_biome)
-	_highlight_btn_group(_size_btns, game.selected_size_idx)
+	_highlight_btn_group(_skin_btns, game.selected_skin)
+	if _lbl_size_val != null:
+		_lbl_size_val.text = "%dx%dx6  (%d cells)" % [n, n, 6 * n * n]
+	if _btn_size_dec != null:
+		_btn_size_dec.disabled = (n <= GameController.MIN_GRID_N)
+	if _btn_size_inc != null:
+		_btn_size_inc.disabled = (n >= GameController.MAX_GRID_N)
 	_highlight_btn_group(_speed_btns, game.selected_speed_idx)
 	_highlight_btn_group(_cam_btns, game.camera_mode)
 	_highlight_btn_group(_touch_btns, game.touch_mode)
@@ -1084,6 +1177,51 @@ func _make_selector_row(label_text: String, options: Array[String], store: Array
 		store.append(btn)
 
 	return row
+
+
+func _make_powerup_badge(icon_name: String, init_text: String, accent: Color, with_bar: bool) -> Dictionary:
+	var panel := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.05, 0.08, 0.14, 0.86)
+	sb.border_color = Color(accent.r, accent.g, accent.b, 0.85)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(14)
+	sb.set_content_margin_all(6)
+	sb.content_margin_left = 10
+	sb.content_margin_right = 10
+	panel.add_theme_stylebox_override("panel", sb)
+	panel.visible = false
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 3)
+	panel.add_child(vbox)
+
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 6)
+	vbox.add_child(hbox)
+
+	if _icons.has(icon_name) and _icons[icon_name] != null:
+		var tex := TextureRect.new()
+		tex.texture = _icons[icon_name]
+		tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tex.custom_minimum_size = Vector2(18, 18)
+		hbox.add_child(tex)
+
+	var lbl := _make_label(init_text, 13, accent)
+	hbox.add_child(lbl)
+
+	var bar: ProgressBar = null
+	if with_bar:
+		bar = ProgressBar.new()
+		bar.max_value = 1.0
+		bar.value = 1.0
+		bar.show_percentage = false
+		bar.custom_minimum_size = Vector2(90, 6)
+		vbox.add_child(bar)
+
+	return {"panel": panel, "label": lbl, "bar": bar}
 
 
 func _make_glass_panel(bg: Color, pad: int) -> PanelContainer:
